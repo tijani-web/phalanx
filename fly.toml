@@ -10,6 +10,7 @@ primary_region = 'jnb'
   dockerfile = 'Dockerfile'
 
 [env]
+  BIND_ADDR = '::'
   BIND_PORT = '7946'
   DATA_DIR = '/data'
   DEBUG_ADDR = '[::]:8080'

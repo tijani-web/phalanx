@@ -41,7 +41,7 @@ func main() {
 	grpcAddr := envOr("GRPC_ADDR", "[::]:9000")
 	debugAddr := envOr("DEBUG_ADDR", "[::]:8080")
 	seeds := splitCSV(envOr("SEEDS", ""))
-	bindAddr := envOr("BIND_ADDR", "0.0.0.0")
+	bindAddr := envOr("BIND_ADDR", "::")
 	bindPort := envInt("BIND_PORT", 7946)
 	tickMs := envInt("TICK_MS", 200)
 	election := envInt("ELECTION", 20)
