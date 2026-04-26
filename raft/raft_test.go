@@ -4,8 +4,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/basit-tijani/phalanx/logger"
-	"github.com/basit-tijani/phalanx/pb"
+	"github.com/tijani-web/phalanx/logger"
+	"github.com/tijani-web/phalanx/pb"
 )
 
 // newTestRaft creates a Raft node with deterministic settings for testing.

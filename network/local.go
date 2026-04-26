@@ -6,7 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/basit-tijani/phalanx/pb"
+	"github.com/tijani-web/phalanx/pb"
 )
 
 const defaultInboxSize = 256

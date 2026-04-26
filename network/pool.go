@@ -1,7 +1,7 @@
 package network
 
 import (
-	"github.com/basit-tijani/phalanx/pb"
+	"github.com/tijani-web/phalanx/pb"
 	"sync"
 )
 

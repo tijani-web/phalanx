@@ -20,13 +20,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/basit-tijani/phalanx/discovery"
-	"github.com/basit-tijani/phalanx/fsm"
-	"github.com/basit-tijani/phalanx/network"
-	"github.com/basit-tijani/phalanx/observability"
-	"github.com/basit-tijani/phalanx/pb"
-	"github.com/basit-tijani/phalanx/raft"
-	"github.com/basit-tijani/phalanx/storage"
+	"github.com/tijani-web/phalanx/discovery"
+	"github.com/tijani-web/phalanx/fsm"
+	"github.com/tijani-web/phalanx/network"
+	"github.com/tijani-web/phalanx/observability"
+	"github.com/tijani-web/phalanx/pb"
+	"github.com/tijani-web/phalanx/raft"
+	"github.com/tijani-web/phalanx/storage"
 )
 
 // NodeConfig defines the parameters for a Phalanx node.

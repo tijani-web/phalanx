@@ -29,9 +29,9 @@ import (
 	"syscall"
 	"time"
 
-	phalanx "github.com/basit-tijani/phalanx"
-	"github.com/basit-tijani/phalanx/discovery"
-	"github.com/basit-tijani/phalanx/logger"
+	phalanx "github.com/tijani-web/phalanx"
+	"github.com/tijani-web/phalanx/discovery"
+	"github.com/tijani-web/phalanx/logger"
 )
 
 func main() {

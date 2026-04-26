@@ -26,7 +26,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/encoding"
 
-	"github.com/basit-tijani/phalanx/pb"
+	"github.com/tijani-web/phalanx/pb"
 )
 
 // ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/basit-tijani/phalanx/pb"
+	"github.com/tijani-web/phalanx/pb"
 )
 
 // TestPersistence verifies that Raft state survives a full shutdown/restart

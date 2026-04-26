@@ -1,4 +1,4 @@
-module github.com/basit-tijani/phalanx
+module github.com/tijani-web/phalanx
 
 go 1.24.0
 

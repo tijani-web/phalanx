@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basit-tijani/phalanx/pb"
+	"github.com/tijani-web/phalanx/pb"
 )
 
 // TestLocalTransport_SendReceive proves Node A can send a LogEntry

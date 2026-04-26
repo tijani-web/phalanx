@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basit-tijani/phalanx/fsm"
-	"github.com/basit-tijani/phalanx/network"
-	"github.com/basit-tijani/phalanx/pb"
-	"github.com/basit-tijani/phalanx/raft"
+	"github.com/tijani-web/phalanx/fsm"
+	"github.com/tijani-web/phalanx/network"
+	"github.com/tijani-web/phalanx/pb"
+	"github.com/tijani-web/phalanx/raft"
 )
 
 // TestClientKV starts a 3-node cluster over real gRPC, elects a leader,

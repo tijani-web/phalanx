@@ -17,7 +17,7 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 
-	"github.com/basit-tijani/phalanx/pb"
+	"github.com/tijani-web/phalanx/pb"
 )
 
 // Fixed key prefixes — single characters minimize LSM key size.

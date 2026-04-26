@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basit-tijani/phalanx/logger"
-	"github.com/basit-tijani/phalanx/network"
+	"github.com/tijani-web/phalanx/logger"
+	"github.com/tijani-web/phalanx/network"
 )
 
 // freePort asks the OS for an available TCP port on loopback.

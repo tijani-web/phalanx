@@ -10,7 +10,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/basit-tijani/phalanx/pb"
+	"github.com/tijani-web/phalanx/pb"
 )
 
 // Sentinel errors for transport operations.
