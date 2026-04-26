@@ -15,7 +15,7 @@
 //	HEARTBEAT  — heartbeat timeout in ticks (default: 5, = 1s at 200ms ticks)
 //
 // Production defaults are tuned for a 5-node global mesh across
-// LOS/LHR/ORD/SIN/FRA with cross-continental round-trip times of 100-300ms.
+// JNB/LHR/ORD/SIN/FRA with cross-continental round-trip times of 100-300ms.
 package main
 
 import (

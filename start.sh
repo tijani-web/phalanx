@@ -13,7 +13,7 @@
 #   FLY_ALLOC_ID    — allocation ID
 #
 # 5-Node Global Mesh:
-#   LOS (Lagos)     — Africa
+#   JNB (Johannesburg) — Africa
 #   LHR (London)    — Europe
 #   ORD (Chicago)   — North America
 #   SIN (Singapore) — Asia-Pacific

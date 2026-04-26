@@ -132,7 +132,7 @@ The only concurrent access is the `fsm.KV` read path (protected by `sync.RWMutex
         ▼             ▼           ▼           ▼             ▼
 ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
 │  Node 0   │  │  Node 1   │  │  Node 2   │  │  Node 3   │  │  Node 4   │
-│   LOS     │  │   LHR     │  │ ORD(LDR)  │  │   SIN     │  │   FRA     │
+│   JNB     │  │   LHR     │  │ ORD(LDR)  │  │   SIN     │  │   FRA     │
 │           │  │           │  │           │  │           │  │           │
 │ ┌───────┐ │  │ ┌───────┐ │  │ ┌───────┐ │  │ ┌───────┐ │  │ ┌───────┐ │
 │ │ Raft  │ │  │ │ Raft  │ │  │ │ Raft  │ │  │ │ Raft  │ │  │ │ Raft  │ │
@@ -501,7 +501,7 @@ fly launch --copy-config --name phalanx --region ord
 Each node needs its own volume for BadgerDB crash recovery. For a global mesh:
 
 ```bash
-fly volumes create phalanx_data --size 1 --region los
+fly volumes create phalanx_data --size 1 --region jnb
 fly volumes create phalanx_data --size 1 --region lhr
 fly volumes create phalanx_data --size 1 --region ord
 fly volumes create phalanx_data --size 1 --region sin

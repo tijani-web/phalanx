@@ -2,7 +2,7 @@
 # Phalanx — Fly.io Global Deployment Manifest
 #
 # 5-Node Raft Cluster across 5 continents:
-#   LOS (Lagos)     — Africa
+#   JNB (Johannesburg) — Africa
 #   LHR (London)    — Europe
 #   ORD (Chicago)   — North America
 #   SIN (Singapore) — Asia-Pacific
@@ -12,7 +12,7 @@
 #
 # Deploy:
 #   fly launch --copy-config
-#   fly volumes create phalanx_data --size 1 --region los
+#   fly volumes create phalanx_data --size 1 --region jnb
 #   fly volumes create phalanx_data --size 1 --region lhr
 #   fly volumes create phalanx_data --size 1 --region ord
 #   fly volumes create phalanx_data --size 1 --region sin
@@ -22,7 +22,7 @@
 # ─────────────────────────────────────────────────────────────────────
 
 app = "phalanx"
-primary_region = "ord"
+primary_region = "lhr"
 
 [build]
   dockerfile = "Dockerfile"
@@ -41,7 +41,7 @@ primary_region = "ord"
 # HEARTBEAT=5:   5 ticks = 1 second (sufficient for cross-Atlantic heartbeats)
 #
 # Election timeout is randomized to [4s, 8s) — wide enough to absorb
-# latency spikes between Lagos and Singapore (~300ms RTT).
+# latency spikes between Johannesburg and Singapore (~300ms RTT).
 [env]
   GRPC_ADDR  = "[::]:9000"
   DEBUG_ADDR = "[::]:8080"
