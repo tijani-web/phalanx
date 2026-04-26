@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package phalanx;
+
+option go_package = "phalanx/pb";
+
+// --------------------------------------------------------------------------
+// Core Types
+// --------------------------------------------------------------------------
+
+// EntryType classifies log entries in the replicated log.
+enum EntryType {
+  COMMAND       = 0; // Client state-machine command.
+  CONFIG_CHANGE = 1; // Raft §6 membership configuration change.
+}
+
+// LogEntry is the fundamental unit of replicated state.
+message LogEntry {
+  uint64    index      = 1;
+  uint64    term       = 2;
+  bytes     data       = 3;
+  EntryType entry_type = 4;
+}
+
+// --------------------------------------------------------------------------
+// AppendEntries RPC (Log Replication)
+// --------------------------------------------------------------------------
+
+message AppendEntriesRequest {
+  uint64              term           = 1;
+  string              leader_id      = 2;
+  uint64              prev_log_index = 3;
+  uint64              prev_log_term  = 4;
+  repeated LogEntry   entries        = 5;
+  uint64              leader_commit  = 6;
+}
+
+message AppendEntriesResponse {
+  uint64 term           = 1;
+  bool   success        = 2;
+  // Optimization: follower's last log index for fast log catchup.
+  uint64 last_log_index = 3;
+}
+
+// --------------------------------------------------------------------------
+// RequestVote RPC (Leader Election)
+// --------------------------------------------------------------------------
+
+message RequestVoteRequest {
+  uint64 term           = 1;
+  string candidate_id   = 2;
+  uint64 last_log_index = 3;
+  uint64 last_log_term  = 4;
+  // Pre-Vote extension (§9.6) — prevents disruptive elections
+  // from partitioned nodes rejoining the cluster.
+  bool   is_pre_vote    = 5;
+}
+
+message RequestVoteResponse {
+  uint64 term         = 1;
+  bool   vote_granted = 2;
+}
+
+// --------------------------------------------------------------------------
+// Consensus Service
+// --------------------------------------------------------------------------
+
+service Consensus {
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+  rpc RequestVote(RequestVoteRequest)     returns (RequestVoteResponse);
+}

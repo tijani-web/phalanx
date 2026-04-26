@@ -1,0 +1,48 @@
+# Binaries
+/phalanx
+/phalanx-server
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (errors from tools, vendor, etc.)
+/vendor/
+/workspace/
+
+# Development / OS specific
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Phalanx Specific Data
+/data/
+/data-*/
+*.sock
+
+# Next.js Frontend
+/phalanx-app/docs/.next/
+/phalanx-app/docs/node_modules/
+/phalanx-app/docs/out/
+/phalanx-app/docs/.env.local
+/phalanx-app/docs/.env.development.local
+/phalanx-app/docs/.env.test.local
+/phalanx-app/docs/.env.production.local
+/phalanx-app/docs/.vercel/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Specs/docs
+PHALANX_SPEC.md
+phalanx_spec_.md

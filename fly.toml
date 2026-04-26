@@ -1,0 +1,88 @@
+# ─────────────────────────────────────────────────────────────────────
+# Phalanx — Fly.io Global Deployment Manifest
+#
+# 5-Node Raft Cluster across 5 continents:
+#   LOS (Lagos)     — Africa
+#   LHR (London)    — Europe
+#   ORD (Chicago)   — North America
+#   SIN (Singapore) — Asia-Pacific
+#   FRA (Frankfurt) — Central Europe
+#
+# Quorum: N=5, Q=3 — tolerates 2 simultaneous region failures.
+#
+# Deploy:
+#   fly launch --copy-config
+#   fly volumes create phalanx_data --size 1 --region los
+#   fly volumes create phalanx_data --size 1 --region lhr
+#   fly volumes create phalanx_data --size 1 --region ord
+#   fly volumes create phalanx_data --size 1 --region sin
+#   fly volumes create phalanx_data --size 1 --region fra
+#   fly deploy
+#   fly scale count 5
+# ─────────────────────────────────────────────────────────────────────
+
+app = "phalanx"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# ─── Persistent Storage ───
+# Each machine gets its own volume for BadgerDB crash recovery.
+[mounts]
+  source = "phalanx_data"
+  destination = "/data"
+
+# ─── Environment ───
+# Tuned for cross-continental round-trip times (100-300ms RTT).
+#
+# TICK_MS=200:   200ms tick interval (accounts for transcontinental latency)
+# ELECTION=20:   20 ticks = 4 seconds (prevents election flapping on LOS↔SIN path)
+# HEARTBEAT=5:   5 ticks = 1 second (sufficient for cross-Atlantic heartbeats)
+#
+# Election timeout is randomized to [4s, 8s) — wide enough to absorb
+# latency spikes between Lagos and Singapore (~300ms RTT).
+[env]
+  GRPC_ADDR  = "[::]:9000"
+  DEBUG_ADDR = "[::]:8080"
+  DATA_DIR   = "/data"
+  ELECTION   = "20"
+  HEARTBEAT  = "5"
+  TICK_MS    = "200"
+  BIND_PORT  = "7946"
+
+# ─── Services ───
+# gRPC: internal-only (node-to-node consensus + client CLI).
+# Debug: internal-only (operator access via `fly proxy`).
+
+[[services]]
+  internal_port = 9000
+  protocol      = "tcp"
+  auto_stop_machines  = false
+  auto_start_machines = true
+  min_machines_running = 5
+
+  [[services.ports]]
+    port = 9000
+
+[[services]]
+  internal_port = 8080
+  protocol      = "tcp"
+
+  [[services.ports]]
+    port = 8080
+
+# ─── Health Checks ───
+[[services.http_checks]]
+  interval   = "15s"
+  timeout    = "5s"
+  path       = "/health"
+  port       = 8080
+  method     = "GET"
+
+# ─── Machine Configuration ───
+# shared-cpu-1x is sufficient — Raft is I/O bound, not CPU bound.
+# 256MB handles BadgerDB + gRPC + gossip comfortably.
+[vm]
+  size = "shared-cpu-1x"
+  memory = "256mb"
