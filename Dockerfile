@@ -31,9 +31,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 # ───── Stage 2: Runtime ─────
 FROM alpine:3.20
-
-RUN apk add --no-cache ca-certificates bash
-
+RUN apk add --no-cache ca-certificates bash bind-tools
 # BadgerDB data directory — mount a volume here.
 RUN mkdir -p /data
 VOLUME ["/data"]

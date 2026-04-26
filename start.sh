@@ -45,7 +45,7 @@ echo "» discovering peers via DNS: $INTERNAL_HOST"
 
 # Wait for DNS to be available (new deploys may take a moment).
 SEEDS=""
-for attempt in $(seq 1 15); do
+for attempt in $(seq 1 30); do
     # dig for AAAA records; extract IPv6 addresses.
     ADDRS=$(dig +short AAAA "$INTERNAL_HOST" 2>/dev/null || true)
     if [ -n "$ADDRS" ]; then
@@ -55,7 +55,7 @@ for attempt in $(seq 1 15); do
         done | paste -sd',' -)
         break
     fi
-    echo "» waiting for DNS... (attempt $attempt/15)"
+    echo "» waiting for DNS... (attempt $attempt/30)"
     sleep 2
 done
 
