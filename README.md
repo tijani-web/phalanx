@@ -383,7 +383,7 @@ All metrics use `atomic.Uint64` for lock-free concurrent access:
 
 ```bash
 # Clone
-git clone https://github.com/youruser/phalanx.git
+git clone https://github.com/tijani-web/phalanx.git
 cd phalanx
 
 # Build server + CLI
