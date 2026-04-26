@@ -423,7 +423,8 @@ func (n *Node) handleDiscoveryEvent(event discovery.Event) {
 			"node_id", event.NodeID,
 			"raft_addr", event.RaftAddr,
 		)
-		n.raft.ProposeConfigChange(event.RaftAddr)
+		n.raft.AddPeer(event.NodeID)
+		n.peerAddrs[event.NodeID] = event.RaftAddr
 		n.persistState()
 		n.dispatchMessages()
 

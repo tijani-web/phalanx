@@ -915,3 +915,19 @@ func (r *Raft) ProposeConfigChange(addr string) {
 	// Replicate to followers immediately.
 	r.broadcastHeartbeat()
 }
+
+// AddPeer dynamically adds a new peer to the cluster.
+// This bypasses formal Joint-Consensus (Phase 5) to allow dynamic
+// mesh bootstrapping via the Gossip layer.
+func (r *Raft) AddPeer(nodeID string) {
+	if nodeID == r.id {
+		return // don't add self
+	}
+	for _, p := range r.peers {
+		if p == nodeID {
+			return
+		}
+	}
+	r.peers = append(r.peers, nodeID)
+	r.logger.Info("added peer to quorum", "node_id", nodeID, "total_peers", len(r.peers)+1)
+}
