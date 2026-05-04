@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -56,15 +57,14 @@ type Node struct {
 	logger    *slog.Logger
 	cfg       NodeConfig
 
-	// Async responses from outgoing gRPC calls are fed back here.
-	responseCh chan raft.Message
-
 	// Pending proposals awaiting commit — keyed by log index.
 	proposals map[uint64]chan struct{}
 
 	// Peer address map: node ID → gRPC address.
 	// Populated by SetPeerAddr or discovery.
 	peerAddrs map[string]string
+
+	mu sync.RWMutex
 }
 
 // NewNode creates a new Phalanx node with persistence, gRPC transport,
@@ -126,10 +126,12 @@ func NewNode(cfg NodeConfig) (*Node, error) {
 		metrics:    observability.NewMetrics(),
 		logger:     cfg.Logger,
 		cfg:        cfg,
-		responseCh: make(chan raft.Message, 128),
 		proposals:  make(map[uint64]chan struct{}),
 		peerAddrs:  make(map[string]string),
 	}
+
+	grpcTransport.RegisterHandlers(n, n)
+	grpcTransport.Start()
 
 	cfg.Logger.Info("node initialized",
 		"id", cfg.ID,
@@ -171,8 +173,8 @@ func (n *Node) resolvePeerAddr(nodeID string) string {
 	return nodeID // Fallback: assume the ID IS the address.
 }
 
-// Run starts the main event loop. Blocks until the context is cancelled
-// or a fatal error occurs. This is the heart of the Phalanx node.
+// Run starts the main event loop for background ticks and discovery events.
+// Consensus and KV methods execute concurrently via gRPC handlers.
 func (n *Node) Run(ctx context.Context) error {
 	// Start the debug HTTP server on a separate port.
 	go n.startDebugServer()
@@ -186,44 +188,23 @@ func (n *Node) Run(ctx context.Context) error {
 			return n.shutdown()
 
 		// --- Tick ---
-		// Advances the Raft logical clock. Followers check election timeout,
-		// leaders send heartbeats. Post-tick messages are dispatched.
 		case <-ticker.C:
+			n.mu.Lock()
 			n.raft.Tick()
 			n.applyCommitted()
 			n.persistState()
 			n.dispatchMessages()
 			n.updateMetrics()
-
-		// --- Incoming gRPC Consensus RPCs ---
-		case rpc, ok := <-n.grpc.RPCs():
-			if !ok {
-				return fmt.Errorf("node: rpc channel closed")
-			}
-			n.handleRPC(rpc)
-
-		// --- Client Propose ---
-		case op := <-n.grpc.Proposes():
-			n.handlePropose(op)
-
-		// --- Client Read ---
-		case op := <-n.grpc.Reads():
-			n.handleRead(op)
-
-		// --- Async Responses ---
-		case resp := <-n.responseCh:
-			n.raft.Step(resp)
-			n.applyCommitted()
-			n.persistState()
-			n.dispatchMessages()
-			n.updateMetrics()
+			n.mu.Unlock()
 
 		// --- Discovery Events ---
 		case event, ok := <-n.discoveryEvents():
 			if !ok {
 				continue
 			}
+			n.mu.Lock()
 			n.handleDiscoveryEvent(event)
+			n.mu.Unlock()
 		}
 	}
 }
@@ -232,27 +213,29 @@ func (n *Node) Run(ctx context.Context) error {
 // KV Handlers
 // ---------------------------------------------------------------------------
 
-func (n *Node) handlePropose(op network.ProposeOp) {
+func (n *Node) HandlePropose(ctx context.Context, req *pb.ProposeRequest) (*pb.ProposeResponse, error) {
+	n.mu.Lock()
 	n.metrics.ProposalsTotal.Add(1)
 
 	// Leader redirection.
 	if n.raft.State() != raft.Leader {
-		op.Response <- &pb.ProposeResponse{
+		leaderAddr := n.resolveLeaderAddr()
+		n.mu.Unlock()
+		return &pb.ProposeResponse{
 			Success:    false,
-			LeaderAddr: n.resolveLeaderAddr(),
+			LeaderAddr: leaderAddr,
 			Error:      "not leader",
-		}
-		return
+		}, nil
 	}
 
 	// Propose to Raft log.
-	idx, err := n.raft.Propose(op.Request.Data)
+	idx, err := n.raft.Propose(req.Data)
 	if err != nil {
-		op.Response <- &pb.ProposeResponse{
+		n.mu.Unlock()
+		return &pb.ProposeResponse{
 			Success: false,
 			Error:   err.Error(),
-		}
-		return
+		}, nil
 	}
 
 	// Register pending proposal — will be signalled when applied.
@@ -262,47 +245,51 @@ func (n *Node) handlePropose(op network.ProposeOp) {
 	n.persistState()
 	n.dispatchMessages()
 	n.updateMetrics()
+	n.mu.Unlock()
 
-	// Wait for commit asynchronously to avoid blocking the event loop.
-	go func() {
-		select {
-		case <-doneCh:
-			op.Response <- &pb.ProposeResponse{Success: true}
-		case <-time.After(5 * time.Second):
-			op.Response <- &pb.ProposeResponse{
-				Success: false,
-				Error:   "proposal timed out",
-			}
-		}
-	}()
+	// Wait for commit asynchronously to avoid blocking the caller.
+	select {
+	case <-doneCh:
+		return &pb.ProposeResponse{Success: true}, nil
+	case <-time.After(5 * time.Second):
+		return &pb.ProposeResponse{
+			Success: false,
+			Error:   "proposal timed out",
+		}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
-func (n *Node) handleRead(op network.ReadOp) {
+func (n *Node) HandleRead(ctx context.Context, req *pb.ReadRequest) (*pb.ReadResponse, error) {
+	n.mu.RLock()
 	n.metrics.ReadsTotal.Add(1)
 
 	// Leader redirection.
 	if n.raft.State() != raft.Leader {
-		op.Response <- &pb.ReadResponse{
-			LeaderAddr: n.resolveLeaderAddr(),
+		leaderAddr := n.resolveLeaderAddr()
+		n.mu.RUnlock()
+		return &pb.ReadResponse{
+			LeaderAddr: leaderAddr,
 			Error:      "not leader",
-		}
-		return
+		}, nil
 	}
 
 	// Linearizable read: verify we still hold a majority lease.
 	if !n.raft.HasLeaderQuorum() {
-		op.Response <- &pb.ReadResponse{
+		n.mu.RUnlock()
+		return &pb.ReadResponse{
 			Error: "leader lost quorum — cannot serve linearizable read",
-		}
-		return
+		}, nil
 	}
+	n.mu.RUnlock()
 
-	// Read from FSM.
-	value, found := n.fsm.Get(op.Request.Key)
-	op.Response <- &pb.ReadResponse{
+	// Read from FSM (thread-safe).
+	value, found := n.fsm.Get(req.Key)
+	return &pb.ReadResponse{
 		Value: value,
 		Found: found,
-	}
+	}, nil
 }
 
 // resolveLeaderAddr returns the leader's gRPC address for client redirection.
@@ -349,34 +336,30 @@ func (n *Node) applyCommitted() {
 // Consensus Event Handlers
 // ---------------------------------------------------------------------------
 
-func (n *Node) handleRPC(rpc network.IncomingRPC) {
-	if rpc.AppendEntries != nil {
-		n.handleAppendEntriesRPC(rpc.AppendEntries)
-	} else if rpc.RequestVote != nil {
-		n.handleRequestVoteRPC(rpc.RequestVote)
-	}
-}
+func (n *Node) HandleAppendEntries(ctx context.Context, req *pb.AppendEntriesRequest) (*pb.AppendEntriesResponse, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 
-func (n *Node) handleAppendEntriesRPC(rpc *network.AppendEntriesRPC) {
 	msg := raft.Message{
 		Type:         raft.MsgAppendEntries,
-		From:         rpc.Request.LeaderID,
+		From:         req.LeaderID,
 		To:           n.cfg.ID,
-		Term:         rpc.Request.Term,
-		PrevLogIndex: rpc.Request.PrevLogIndex,
-		PrevLogTerm:  rpc.Request.PrevLogTerm,
-		Entries:      rpc.Request.Entries,
-		LeaderCommit: rpc.Request.LeaderCommit,
+		Term:         req.Term,
+		PrevLogIndex: req.PrevLogIndex,
+		PrevLogTerm:  req.PrevLogTerm,
+		Entries:      req.Entries,
+		LeaderCommit: req.LeaderCommit,
 	}
 
 	n.raft.Step(msg)
 	n.applyCommitted()
 	n.persistState()
 
+	var resp *pb.AppendEntriesResponse
 	// Extract response and route remaining messages.
 	for _, m := range n.raft.Messages() {
 		if m.Type == raft.MsgAppendEntriesResp && m.To == msg.From {
-			rpc.Response <- &pb.AppendEntriesResponse{
+			resp = &pb.AppendEntriesResponse{
 				Term:         m.Term,
 				Success:      !m.Reject,
 				LastLogIndex: m.Index,
@@ -386,25 +369,34 @@ func (n *Node) handleAppendEntriesRPC(rpc *network.AppendEntriesRPC) {
 		}
 	}
 	n.updateMetrics()
+	
+	if resp == nil {
+		return nil, fmt.Errorf("node: no response generated for AppendEntries")
+	}
+	return resp, nil
 }
 
-func (n *Node) handleRequestVoteRPC(rpc *network.RequestVoteRPC) {
+func (n *Node) HandleRequestVote(ctx context.Context, req *pb.RequestVoteRequest) (*pb.RequestVoteResponse, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	msg := raft.Message{
 		Type:         raft.MsgRequestVote,
-		From:         rpc.Request.CandidateID,
+		From:         req.CandidateID,
 		To:           n.cfg.ID,
-		Term:         rpc.Request.Term,
-		LastLogIndex: rpc.Request.LastLogIndex,
-		LastLogTerm:  rpc.Request.LastLogTerm,
-		IsPreVote:    rpc.Request.IsPreVote,
+		Term:         req.Term,
+		LastLogIndex: req.LastLogIndex,
+		LastLogTerm:  req.LastLogTerm,
+		IsPreVote:    req.IsPreVote,
 	}
 
 	n.raft.Step(msg)
 	n.persistState()
 
+	var resp *pb.RequestVoteResponse
 	for _, m := range n.raft.Messages() {
 		if m.Type == raft.MsgRequestVoteResp && m.To == msg.From {
-			rpc.Response <- &pb.RequestVoteResponse{
+			resp = &pb.RequestVoteResponse{
 				Term:        m.Term,
 				VoteGranted: !m.Reject,
 				IsPreVote:   m.IsPreVote,
@@ -414,6 +406,11 @@ func (n *Node) handleRequestVoteRPC(rpc *network.RequestVoteRPC) {
 		}
 	}
 	n.updateMetrics()
+
+	if resp == nil {
+		return nil, fmt.Errorf("node: no response generated for RequestVote")
+	}
+	return resp, nil
 }
 
 func (n *Node) handleDiscoveryEvent(event discovery.Event) {
@@ -477,14 +474,21 @@ func (n *Node) sendAppendEntries(msg raft.Message) {
 		return
 	}
 
-	n.responseCh <- raft.Message{
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	n.raft.Step(raft.Message{
 		Type:   raft.MsgAppendEntriesResp,
 		From:   msg.To,
 		To:     msg.From,
 		Term:   resp.Term,
 		Reject: !resp.Success,
 		Index:  resp.LastLogIndex,
-	}
+	})
+	n.applyCommitted()
+	n.persistState()
+	n.dispatchMessages()
+	n.updateMetrics()
 }
 
 func (n *Node) sendRequestVote(msg raft.Message) {
@@ -505,14 +509,20 @@ func (n *Node) sendRequestVote(msg raft.Message) {
 		return
 	}
 
-	n.responseCh <- raft.Message{
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	n.raft.Step(raft.Message{
 		Type:      raft.MsgRequestVoteResp,
 		From:      msg.To,
 		To:        msg.From,
 		Term:      resp.Term,
 		Reject:    !resp.VoteGranted,
 		IsPreVote: resp.IsPreVote,
-	}
+	})
+	n.persistState()
+	n.dispatchMessages()
+	n.updateMetrics()
 }
 
 // ---------------------------------------------------------------------------
@@ -535,6 +545,9 @@ func (n *Node) updateMetrics() {
 }
 
 func (n *Node) nodeStatus() observability.NodeStatus {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+
 	return observability.NodeStatus{
 		NodeID:     n.cfg.ID,
 		State:      n.raft.State().String(),

@@ -41,50 +41,24 @@ func init() {
 
 type jsonCodec struct{}
 
-func (jsonCodec) Marshal(v any) ([]byte, error)     { return json.Marshal(v) }
+func (jsonCodec) Marshal(v any) ([]byte, error)      { return json.Marshal(v) }
 func (jsonCodec) Unmarshal(data []byte, v any) error { return json.Unmarshal(data, v) }
-func (jsonCodec) Name() string                      { return codecName }
+func (jsonCodec) Name() string                       { return codecName }
 
 // ---------------------------------------------------------------------------
-// Incoming RPC Types
+// Handler Interfaces
 // ---------------------------------------------------------------------------
 
-// IncomingRPC is the unit delivered to the Node event loop.
-// Exactly one of AppendEntries / RequestVote is non-nil.
-type IncomingRPC struct {
-	AppendEntries *AppendEntriesRPC
-	RequestVote   *RequestVoteRPC
+// ConsensusHandler is implemented by the Node to handle incoming consensus RPCs concurrently.
+type ConsensusHandler interface {
+	HandleAppendEntries(ctx context.Context, req *pb.AppendEntriesRequest) (*pb.AppendEntriesResponse, error)
+	HandleRequestVote(ctx context.Context, req *pb.RequestVoteRequest) (*pb.RequestVoteResponse, error)
 }
 
-// AppendEntriesRPC bundles an incoming AppendEntries call with
-// a response channel. The gRPC handler blocks on Response until
-// the Node writes the reply.
-type AppendEntriesRPC struct {
-	Request  *pb.AppendEntriesRequest
-	Response chan *pb.AppendEntriesResponse
-}
-
-// RequestVoteRPC bundles an incoming RequestVote call with
-// a response channel.
-type RequestVoteRPC struct {
-	Request  *pb.RequestVoteRequest
-	Response chan *pb.RequestVoteResponse
-}
-
-// ---------------------------------------------------------------------------
-// KV Client RPC Types (Phase 5)
-// ---------------------------------------------------------------------------
-
-// ProposeOp carries a client propose request into the Node event loop.
-type ProposeOp struct {
-	Request  *pb.ProposeRequest
-	Response chan *pb.ProposeResponse
-}
-
-// ReadOp carries a client read request into the Node event loop.
-type ReadOp struct {
-	Request  *pb.ReadRequest
-	Response chan *pb.ReadResponse
+// KVHandler is implemented by the Node to handle incoming client RPCs concurrently.
+type KVHandler interface {
+	HandlePropose(ctx context.Context, req *pb.ProposeRequest) (*pb.ProposeResponse, error)
+	HandleRead(ctx context.Context, req *pb.ReadRequest) (*pb.ReadResponse, error)
 }
 
 // ---------------------------------------------------------------------------
@@ -225,11 +199,6 @@ type GRPCTransport struct {
 	addr     string
 	server   *grpc.Server
 	listener net.Listener
-	rpcs     chan IncomingRPC
-
-	// KV client channels — read by the Node event loop.
-	proposes chan ProposeOp
-	reads    chan ReadOp
 
 	// Client-side: lazy peer connections.
 	mu    sync.RWMutex
@@ -248,24 +217,15 @@ func NewGRPCTransport(cfg GRPCConfig) (*GRPCTransport, error) {
 	}
 
 	t := &GRPCTransport{
-		addr:     addr,
-		rpcs:     make(chan IncomingRPC, defaultRPCBuffer),
-		proposes: make(chan ProposeOp, defaultRPCBuffer),
-		reads:    make(chan ReadOp, defaultRPCBuffer),
-		conns:    make(map[string]*grpc.ClientConn),
-		logger:   cfg.Logger,
+		addr:   addr,
+		conns:  make(map[string]*grpc.ClientConn),
+		logger: cfg.Logger,
 	}
 
 	// Create server with latency interceptor.
 	t.server = grpc.NewServer(
 		grpc.UnaryInterceptor(latencyInterceptor(t.logger)),
 	)
-
-	// Register the consensus service using our hand-written descriptor.
-	t.server.RegisterService(&consensusServiceDesc, &consensusGRPCHandler{rpcs: t.rpcs})
-
-	// Register the KV client service.
-	t.server.RegisterService(&kvServiceDesc, &kvGRPCHandler{proposes: t.proposes, reads: t.reads})
 
 	// Bind listener.
 	lis, err := net.Listen("tcp", addr)
@@ -274,31 +234,23 @@ func NewGRPCTransport(cfg GRPCConfig) (*GRPCTransport, error) {
 	}
 	t.listener = lis
 
-	// Serve in background goroutine.
-	go func() {
-		if err := t.server.Serve(lis); err != nil && !t.closed.Load() {
-			t.logger.Error("grpc server error", "err", err)
-		}
-	}()
-
-	t.logger.Info("grpc transport started", "addr", lis.Addr().String())
 	return t, nil
 }
 
-// RPCs returns the channel of incoming consensus RPCs.
-// The Node event loop reads from this channel.
-func (t *GRPCTransport) RPCs() <-chan IncomingRPC {
-	return t.rpcs
+// Start begins serving incoming gRPC requests. Must be called after RegisterHandlers.
+func (t *GRPCTransport) Start() {
+	go func() {
+		if err := t.server.Serve(t.listener); err != nil && !t.closed.Load() {
+			t.logger.Error("grpc server error", "err", err)
+		}
+	}()
+	t.logger.Info("grpc transport started", "addr", t.listener.Addr().String())
 }
 
-// Proposes returns the channel of incoming Propose requests from clients.
-func (t *GRPCTransport) Proposes() <-chan ProposeOp {
-	return t.proposes
-}
-
-// Reads returns the channel of incoming Read requests from clients.
-func (t *GRPCTransport) Reads() <-chan ReadOp {
-	return t.reads
+// RegisterHandlers attaches the node handlers to the gRPC server.
+func (t *GRPCTransport) RegisterHandlers(consensus ConsensusHandler, kv KVHandler) {
+	t.server.RegisterService(&consensusServiceDesc, &consensusGRPCHandler{handler: consensus})
+	t.server.RegisterService(&kvServiceDesc, &kvGRPCHandler{handler: kv})
 }
 
 // Addr returns the actual listen address (useful when port 0 is used).
@@ -377,7 +329,6 @@ func (t *GRPCTransport) Close() error {
 	}
 	t.mu.Unlock()
 
-	close(t.rpcs)
 	t.logger.Info("grpc transport shutdown")
 	return nil
 }
@@ -386,47 +337,17 @@ func (t *GRPCTransport) Close() error {
 // Consensus gRPC Handler
 // ---------------------------------------------------------------------------
 
-// consensusGRPCHandler implements pb.ConsensusServer by queuing incoming
-// RPCs on a buffered channel. The gRPC handler goroutine blocks until
-// the Node event loop processes the request and writes a response.
+// consensusGRPCHandler implements pb.ConsensusServer by delegating to the ConsensusHandler.
 type consensusGRPCHandler struct {
-	rpcs chan<- IncomingRPC
+	handler ConsensusHandler
 }
 
 func (h *consensusGRPCHandler) AppendEntries(ctx context.Context, req *pb.AppendEntriesRequest) (*pb.AppendEntriesResponse, error) {
-	respCh := make(chan *pb.AppendEntriesResponse, 1)
-	rpc := IncomingRPC{
-		AppendEntries: &AppendEntriesRPC{Request: req, Response: respCh},
-	}
-	select {
-	case h.rpcs <- rpc:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	select {
-	case resp := <-respCh:
-		return resp, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return h.handler.HandleAppendEntries(ctx, req)
 }
 
 func (h *consensusGRPCHandler) RequestVote(ctx context.Context, req *pb.RequestVoteRequest) (*pb.RequestVoteResponse, error) {
-	respCh := make(chan *pb.RequestVoteResponse, 1)
-	rpc := IncomingRPC{
-		RequestVote: &RequestVoteRPC{Request: req, Response: respCh},
-	}
-	select {
-	case h.rpcs <- rpc:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	select {
-	case resp := <-respCh:
-		return resp, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return h.handler.HandleRequestVote(ctx, req)
 }
 
 // ---------------------------------------------------------------------------
@@ -434,40 +355,15 @@ func (h *consensusGRPCHandler) RequestVote(ctx context.Context, req *pb.RequestV
 // ---------------------------------------------------------------------------
 
 type kvGRPCHandler struct {
-	proposes chan<- ProposeOp
-	reads    chan<- ReadOp
+	handler KVHandler
 }
 
 func (h *kvGRPCHandler) Propose(ctx context.Context, req *pb.ProposeRequest) (*pb.ProposeResponse, error) {
-	respCh := make(chan *pb.ProposeResponse, 1)
-	op := ProposeOp{Request: req, Response: respCh}
-	select {
-	case h.proposes <- op:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	select {
-	case resp := <-respCh:
-		return resp, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return h.handler.HandlePropose(ctx, req)
 }
 
 func (h *kvGRPCHandler) Read(ctx context.Context, req *pb.ReadRequest) (*pb.ReadResponse, error) {
-	respCh := make(chan *pb.ReadResponse, 1)
-	op := ReadOp{Request: req, Response: respCh}
-	select {
-	case h.reads <- op:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	select {
-	case resp := <-respCh:
-		return resp, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return h.handler.HandleRead(ctx, req)
 }
 
 // ---------------------------------------------------------------------------

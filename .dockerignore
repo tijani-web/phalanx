@@ -1,0 +1,93 @@
+# flyctl launch added from .gitignore
+# Binaries
+phalanx
+phalanx-server
+**\*.exe
+**\*.exe~
+**\*.dll
+**\*.so
+**\*.dylib
+**\bin
+
+# Test binary, built with `go test -c`
+**\*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+**\*.out
+
+# Dependency directories (errors from tools, vendor, etc.)
+vendor
+workspace
+
+# Development / OS specific
+**\.DS_Store
+**\.idea
+**\.vscode
+**\*.swp
+
+# Phalanx Specific Data
+data
+data-*
+**\*.sock
+
+# Next.js Frontend
+phalanx-app\docs\.next
+phalanx-app\docs\node_modules
+phalanx-app\docs\out
+phalanx-app\docs\.env.local
+phalanx-app\docs\.env.development.local
+phalanx-app\docs\.env.test.local
+phalanx-app\docs\.env.production.local
+phalanx-app\docs\.vercel
+**\npm-debug.log*
+**\yarn-debug.log*
+**\yarn-error.log*
+**\.pnpm-debug.log*
+
+# Specs/docs
+**\PHALANX_SPEC.md
+**\phalanx_spec_.md
+
+# flyctl launch added from phalanx-app\docs\.gitignore
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+phalanx-app\docs\node_modules
+phalanx-app\docs\.pnp
+phalanx-app\docs\**\.pnp.*
+phalanx-app\docs\**\.yarn\*
+!phalanx-app\docs\**\.yarn\patches
+!phalanx-app\docs\**\.yarn\plugins
+!phalanx-app\docs\**\.yarn\releases
+!phalanx-app\docs\**\.yarn\versions
+
+# testing
+phalanx-app\docs\coverage
+
+# next.js
+phalanx-app\docs\.next
+phalanx-app\docs\out
+
+# production
+phalanx-app\docs\build
+
+# misc
+phalanx-app\docs\**\.DS_Store
+phalanx-app\docs\**\*.pem
+
+# debug
+phalanx-app\docs\**\npm-debug.log*
+phalanx-app\docs\**\yarn-debug.log*
+phalanx-app\docs\**\yarn-error.log*
+phalanx-app\docs\**\.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+phalanx-app\docs\**\.env*
+
+# vercel
+phalanx-app\docs\**\.vercel
+
+# typescript
+phalanx-app\docs\**\*.tsbuildinfo
+phalanx-app\docs\**\next-env.d.ts
+fly.toml
