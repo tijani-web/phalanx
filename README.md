@@ -12,7 +12,7 @@
 
 ---
 
-Phalanx is a **production-grade distributed consensus engine** built from the ground up in Go. It implements a custom Raft protocol with Pre-Vote extensions, lease-based linearizable reads, and a deterministic, tick-based state machine — all orchestrated through a **single-threaded event loop** that eliminates lock contention on the hot path.
+Phalanx is a **production-grade distributed consensus engine** built from the ground up in Go. It implements a custom Raft protocol with Pre-Vote extensions, lease-based linearizable reads, and a deterministic, tick-based state machine — all orchestrated through a **multi-threaded concurrent architecture** that allows for high-throughput vertical scaling via `sync.RWMutex` state protection.
 
 Designed for deployment on [Fly.io](https://fly.io)'s global edge network, Phalanx provides a replicated key-value store backed by BadgerDB with automatic peer discovery via SWIM gossip.
 
@@ -26,7 +26,7 @@ Designed for deployment on [Fly.io](https://fly.io)'s global edge network, Phala
 
 - [Why Phalanx?](#why-phalanx)
 - [Architecture](#architecture)
-  - [Single-Threaded Event Loop](#single-threaded-event-loop)
+  - [Multi-Threaded Concurrency](#multi-threaded-concurrency)
   - [System Topology](#system-topology)
   - [Data Flow](#data-flow)
 - [Safety Specifications](#safety-specifications)
@@ -78,47 +78,38 @@ Most consensus implementations are either **academic toys** that can't survive a
 ---
 
 ## Architecture
-
-### Single-Threaded Event Loop
-
-The heart of Phalanx is a **single-threaded `select` loop** in `node.go`. Every state mutation — ticks, RPCs, proposals, reads, and discovery events — flows through this one goroutine. There are **zero mutexes** on the consensus hot path.
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                        NODE EVENT LOOP                           │
-│                                                                  │
-│  for { select {                                                  │
-│    case <-ticker.C:                                              │
-│         raft.Tick() → applyCommitted → persist → dispatch        │
-│                                                                  │
-│    case rpc := <-grpc.RPCs():                                    │
-│         raft.Step(msg) → applyCommitted → persist → respond      │
-│                                                                  │
-│    case op := <-grpc.Proposes():                                 │
-│         raft.Propose(data) → register pending → async wait       │
-│                                                                  │
-│    case op := <-grpc.Reads():                                    │
-│         HasLeaderQuorum() → fsm.Get(key) → respond               │
-│                                                                  │
-│    case resp := <-responseCh:                                    │
-│         raft.Step(resp) → applyCommitted → persist → dispatch    │
-│                                                                  │
-│    case event := <-discovery.Events():                           │
-│         ProposeConfigChange(addr)                                │
-│                                                                  │
-│    case <-ctx.Done():                                            │
-│         shutdown() → gRPC.Close() → BadgerDB.Close()             │
-│  }}                                                              │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-**Why this matters:**
-
-- **No lock contention.** The Raft state machine (`currentTerm`, `votedFor`, `log[]`, `commitIndex`) is never accessed concurrently. No `sync.Mutex`, no `sync.RWMutex`, no atomic CAS loops on the write path.
-- **Deterministic execution.** Given the same sequence of inputs, the state machine produces the same outputs. This makes the system testable without real clocks or real networks.
-- **Predictable latency.** No goroutine scheduling jitter from lock acquisition. The event loop processes one event at a time with bounded work per iteration.
-
-The only concurrent access is the `fsm.KV` read path (protected by `sync.RWMutex`) and the `observability.Metrics` (lock-free `atomic.Uint64`).
+ 
+ ### Multi-Threaded Concurrency
+ 
+ The heart of Phalanx is a **concurrent handler model**. While the background `Run` loop handles deterministic ticks and discovery, all incoming state mutations — RPCs, proposals, and reads — are processed concurrently by gRPC handler goroutines. State integrity is maintained via a high-performance `sync.RWMutex`.
+ 
+ ```
+ ┌──────────────────────────────────────────────────────────────────┐
+ │                     CONCURRENT HANDLER MODEL                     │
+ │                                                                  │
+ │  [gRPC Handler] ───┐       ┌──────────────────────────────┐      │
+ │  (AppendEntries)   ├──────▶│      MUTEX-PROTECTED FSM     │      │
+ │                    │       │                              │      │
+ │  [gRPC Handler] ───┤       │  n.mu.Lock()                 │      │
+ │  (RequestVote)     ├──────▶│  raft.Step(msg)              │      │
+ │                    │       │  persist() -> apply()        │      │
+ │  [gRPC Handler] ───┤       │  n.mu.Unlock()               │      │
+ │  (Propose)         │       └──────────────┬───────────────┘      │
+ │                    │                      │                      │
+ │  [Background] ─────┘       ┌──────────────▼───────────────┐      │
+ │  (Ticker/Events)           │    Async Message Dispatch    │      │
+ │                            └──────────────────────────────┘      │
+ └──────────────────────────────────────────────────────────────────┘
+ ```
+ 
+ **Why this matters:**
+ 
+ - **Vertical Scalability.** By decoupling gRPC handling from a single event loop, Phalanx can utilize multiple CPU cores for network decoding and disk I/O, overcoming the throughput ceiling of single-threaded designs.
+ - **Concurrent Read Path.** Linearizable reads acquire a shared `RLock`, allowing them to execute in parallel with other reads while only momentarily blocking during write-path mutations.
+ - **Deterministic Core.** Despite the concurrent access, the underlying Raft state machine remains pure and deterministic. Given the same sequence of inputs, it produces the same outputs, preserving our high testability.
+ - **Predictable Safety.** Coarse-grained locking ensures that the Raft invariant is never violated by race conditions, while the transition from channels to direct method calls reduces allocation overhead.
+ 
+ The Raft state machine (`currentTerm`, `votedFor`, `log[]`, `commitIndex`) is protected by the Node's mutex, while the `fsm.KV` read path uses its own `sync.RWMutex` for granular concurrency.
 
 ### System Topology
 
@@ -151,18 +142,19 @@ The only concurrent access is the `fsm.KV` read path (protected by `sync.RWMutex
 **Write Path (Propose):**
 
 ```
-Client → gRPC Propose → Node event loop → raft.Propose()
-  → append to leader log → broadcastHeartbeat (AppendEntries)
-  → majority ack → commitIndex advances → applyCommitted()
+Client → gRPC Propose → Concurrent Handler → n.mu.Lock()
+  → raft.Propose() → append to leader log → n.mu.Unlock()
+  → broadcastHeartbeat (AppendEntries) → majority ack
+  → n.mu.Lock() → commitIndex advances → applyCommitted() → n.mu.Unlock()
   → fsm.Apply(SET key=value) → respond to client ✓
 ```
 
 **Read Path (Linearizable):**
 
 ```
-Client → gRPC Read → Node event loop
+Client → gRPC Read → Concurrent Handler → n.mu.RLock()
   → HasLeaderQuorum() (verify majority acked this heartbeat round)
-  → fsm.Get(key) → respond to client ✓
+  → n.mu.RUnlock() → fsm.Get(key) → respond to client ✓
 ```
 
 **If the client hits a follower**, the response includes `leader_addr` for automatic redirection.
@@ -711,7 +703,7 @@ All server configuration is via environment variables:
 
 | Decision | Rationale |
 |---|---|
-| Single-threaded event loop | Eliminates lock contention. Predictable latency. Deterministic testing. |
+| Multi-threaded concurrency | Decouples gRPC handlers from background ticks. Enables vertical scaling and high-throughput concurrent reads. |
 | JSON over gRPC | Avoids protoc dependency. Human-readable wire format for debugging. Acceptable overhead for consensus payloads (small). |
 | BadgerDB over BoltDB | LSM-tree with separate value log. Better write amplification for append-heavy Raft logs. |
 | Gossip discovery over static config | Automatic peer discovery. No operator intervention for scale-out. Partition-tolerant. |
